@@ -117,6 +117,15 @@ label.f input[type=color]{padding:2px;height:36px}
 .formats .soon{background:#ffc83d}
 .formats li.hit{color:var(--sun);font-weight:700}
 .cm-timing{border:2px solid var(--line);border-radius:12px;padding:10px 12px}
+.cm-warn{border-radius:10px;padding:8px 12px;font-size:13px;line-height:1.4;margin:0}
+.cm-warn.bad{background:rgba(255,200,61,.14);border:2px solid #ffc83d;color:#ffe39a}
+.cm-warn.good{background:rgba(126,224,106,.1);border:2px solid #7ee06a;color:#c8f5bd}
+.amap{display:grid;grid-template-columns:minmax(78px,auto) minmax(0,1fr) 62px 62px 34px;gap:6px;align-items:center;font-size:13px}
+.amap select,.amap input{min-width:0;width:100%;font-size:13px;padding:4px 6px}
+.amap .h{font-size:11px;opacity:.7;letter-spacing:.05em}
+.amap .auto{color:#a99cc9;font-size:11px}
+.amap .an{display:contents}
+@media (max-width:560px){.amap{grid-template-columns:minmax(0,1fr) 56px 56px 34px}.amap .an{display:flex;flex-direction:column;gap:3px;min-width:0}.amap .h.sn{display:none}}
 .cm-timing summary{cursor:pointer;font-family:var(--display);font-size:13px;letter-spacing:.06em;color:var(--sun)}
 .cm-timing>*:not(summary){margin-top:8px}
 .scrub{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center}
@@ -303,6 +312,7 @@ h3.mini{margin:6px 0 0;font-family:var(--display);font-weight:400;font-size:11px
         <label class="f">Name <input id="cmName" maxlength="24"></label>
         <div class="btns"><span class="btn small primary file">Add files…<input type="file" id="cmFiles" multiple></span><span class="note">or drag them onto this box</span></div>
         <div class="flist" id="cmFileList"></div>
+        <p class="cm-warn bad" id="cmWarn" hidden></p>
         <div class="row2">
           <label class="f">Health bar colour <input type="color" id="cmCol" value="#3cee26"></label>
           <label class="f">Size <input type="range" id="cmSize" min="0.5" max="1.6" step="0.05" value="1"></label>
@@ -316,6 +326,14 @@ h3.mini{margin:6px 0 0;font-family:var(--display);font-weight:400;font-size:11px
           <canvas id="cmCanvas" width="440" height="440" aria-label="Character preview"></canvas>
           <div class="btns" id="cmAnims"></div>
         </div>
+        <details class="cm-timing" id="cmMap" hidden>
+          <summary>Animation names and offsets</summary>
+          <p class="note">Pick which part of the sprite sheet each animation uses, and nudge it with X and Y if it jumps around. Tap ▶ to see it. Like the character editor in Psych Engine, a bigger X moves the pose left and a bigger Y moves it up.</p>
+          <label class="check"><input type="checkbox" id="cmAuto" checked> Line poses up by their feet automatically</label>
+          <label class="check"><input type="checkbox" id="cmGhost" checked> Show the idle pose behind (ghost)</label>
+          <div class="amap" id="cmMapRows"></div>
+          <div class="btns"><button class="btn small" id="cmMapReset">Reset to automatic</button><button class="btn small" id="cmTry">Try it in a song</button></div>
+        </details>
         <details class="cm-timing" id="cmTiming">
           <summary>Animation timing</summary>
           <p class="note">Choose when each animation goes back to idle. Tap Play, pause where you want it to stop (or drag the slider), then tap OK.</p>
@@ -443,7 +461,7 @@ h3.mini{margin:6px 0 0;font-family:var(--display);font-weight:400;font-size:11px
 (()=>{
 'use strict';
 const $=s=>document.querySelector(s);
-const W=1280,H=720,VERSION='1.6';
+const W=1280,H=720,VERSION='1.7';
 const LANE=['#ff5fa2','#4fc3ff','#7ee06a','#ffb03d'];
 const DIRN=['Left','Down','Up','Right'];
 const POSES=['left','down','up','right'];
@@ -1255,7 +1273,20 @@ function readCharDef(files,all){
   return def;
 }
 const rgbHex=a=>Array.isArray(a)&&a.length>=3?'#'+a.slice(0,3).map(v=>clamp(v|0,0,255).toString(16).padStart(2,'0')).join(''):null;
-async function buildChar(rec){
+// Finds where the feet are in a frame (the middle of the lowest visible pixels), so poses can be lined up.
+const feetCache=new WeakMap();
+function feetOf(f){
+  if(feetCache.has(f))return feetCache.get(f);let res=[f.w/2,f.h];
+  try{if(!f.rot){const sh=f.sh,k=Math.min(1,160/Math.max(f.w,f.h)),w=Math.max(1,Math.round(f.w*k)),h=Math.max(1,Math.round(f.h*k)),cv=document.createElement('canvas');
+    cv.width=w;cv.height=h;const g=cv.getContext('2d');g.drawImage(sh.img,f.x*sh.rs,f.y*sh.rsy,f.w*sh.rs,f.h*sh.rsy,0,0,w,h);
+    const d=g.getImageData(0,0,w,h).data,on=(x,y)=>d[(y*w+x)*4+3]>40;let bottom=-1;
+    for(let y=h-1;y>=0&&bottom<0;y--){let n=0;for(let x=0;x<w;x++)if(on(x,y))n++;if(n>=Math.max(1,w*0.02))bottom=y;}
+    if(bottom>=0){const band=Math.max(2,Math.round(h*0.06));let sx=0,n=0;for(let y=Math.max(0,bottom-band);y<=bottom;y++)for(let x=0;x<w;x++)if(on(x,y)){sx+=x;n++;}
+      res=[(n?sx/n+0.5:w/2)/k,(bottom+1)/k];}}}catch(e){}
+  feetCache.set(f,res);return res;
+}
+function dirTest(d){const lo=d.toLowerCase(),cap=d[0]+lo.slice(1);return new RegExp('(^|[^a-z])'+lo+'($|[^a-z])|'+d+'|'+cap);}
+async function buildChar(rec,cache){
   const files=legacyFiles(rec);
   const atl=files.filter(f=>/^atlas-/.test(f.kind)),sheetImgs=files.filter(f=>f.kind==='image'&&f.role!=='icon');
   if(!atl.length){
@@ -1263,34 +1294,60 @@ async function buildChar(rec){
     throw new Error(sheetImgs.length?'now add the sheet data that comes with the image: the .xml (or .txt or .json) with the same name.':'add the sprite sheet image (.png) and the .xml that comes with it.');
   }
   if(!sheetImgs.length)throw new Error('now add the sprite sheet image (.png) that goes with '+atl[0].name+'.');
-  const sheets=[],used=new Set();
-  for(const a of atl){
-    let at;try{at=a.kind==='atlas-xml'?parseAtlas(a.text):a.kind==='atlas-txt'?parsePackerTxt(a.text):parseTPJson(a.text);}catch(e){throw new Error(a.name+': '+e.message);}
-    at.key=fileBase(a.name);at.ikey=fileBase(at.imagePath)||at.key;
-    const im=sheetImgs.find(f=>!used.has(f)&&fileBase(f.name)===at.ikey)||sheetImgs.find(f=>!used.has(f)&&fileBase(f.name)===at.key)||sheetImgs.find(f=>!used.has(f));
-    if(!im)throw new Error('there is no image for '+a.name+'. Add its .png too.');
-    used.add(im);
-    try{at.img=await decodeImage(im.blob);}catch(e){throw new Error(im.name+': '+e.message);}
-    at.rs=at.W?imgW(at.img)/at.W:1;at.rsy=at.H?imgH(at.img)/at.H:at.rs;
-    at.frames.forEach(f=>f.sh=at);sheets.push(at);
+  const sig=files.map(f=>f.name+':'+f.kind+':'+(f.role||'')).join('|');let sheets;
+  if(cache&&cache.sig===sig&&cache.sheets)sheets=cache.sheets;
+  else{
+    sheets=[];const used=new Set();
+    for(const a of atl){
+      let at;try{at=a.kind==='atlas-xml'?parseAtlas(a.text):a.kind==='atlas-txt'?parsePackerTxt(a.text):parseTPJson(a.text);}catch(e){throw new Error(a.name+': '+e.message);}
+      at.key=fileBase(a.name);at.ikey=fileBase(at.imagePath)||at.key;
+      const im=sheetImgs.find(f=>!used.has(f)&&fileBase(f.name)===at.ikey)||sheetImgs.find(f=>!used.has(f)&&fileBase(f.name)===at.key)||sheetImgs.find(f=>!used.has(f));
+      if(!im)throw new Error('there is no image for '+a.name+'. Add its .png too.');
+      used.add(im);
+      try{at.img=await decodeImage(im.blob);}catch(e){throw new Error(im.name+': '+e.message);}
+      at.rs=at.W?imgW(at.img)/at.W:1;at.rsy=at.H?imgH(at.img)/at.H:at.rs;
+      at.frames.forEach(f=>f.sh=at);sheets.push(at);
+    }
+    if(cache){cache.sig=sig;cache.sheets=sheets;}
   }
   const all={frames:[].concat(...sheets.map(s=>s.frames))};
-  const def=readCharDef(files,all),anims={};
-  const add=(name,prefix,fps,loop,indices,off,sheet)=>{if(!name||anims[name])return;const fr=framesFor(all,prefix,indices,sheet);if(fr.length)anims[name]={frames:fr,fps:+fps||24,loop:!!loop,off:Array.isArray(off)?[+off[0]||0,+off[1]||0]:[0,0]};};
-  def.list.forEach(o=>{const a=normAnim(o,all);if(a)add(a.name,a.prefix,a.fps,a.loop,a.indices,a.off,a.sheet);});
-  const bases=[...new Set(all.frames.map(f=>baseOf(f.name)))];
-  if(!anims.idle&&!anims.danceLeft){const b=bases.find(x=>/idle|dance/i.test(x));if(b)add('idle',b);}
-  ['LEFT','DOWN','UP','RIGHT'].forEach(d=>{if(!anims['sing'+d]){const b=bases.find(x=>new RegExp(d,'i').test(x)&&!/miss|alt|idle|dance/i.test(x));if(b)add('sing'+d,b);}
-    if(!anims['sing'+d+'miss']){const b=bases.find(x=>new RegExp(d,'i').test(x)&&/miss/i.test(x));if(b)add('sing'+d+'miss',b);}});
-  if(!anims.hey){const b=bases.find(x=>/hey|cheer/i.test(x));if(b)add('hey',b);}
+  const def=readCharDef(files,all),anims={},fromFile=new Set();
+  const add=(name,prefix,fps,loop,indices,off,sheet)=>{if(!name||anims[name])return false;const fr=framesFor(all,prefix,indices,sheet);if(!fr.length)return false;anims[name]={frames:fr,fps:+fps||24,loop:!!loop,off:Array.isArray(off)?[+off[0]||0,+off[1]||0]:[0,0],prefix};return true;};
+  def.list.forEach(o=>{const a=normAnim(o,all);if(a&&add(a.name,a.prefix,a.fps,a.loop,a.indices,a.off,a.sheet))fromFile.add(a.name);});
+  // Guess anything the character file did not give us, from the names in the sheet
+  const bases=[...new Set(all.frames.map(f=>baseOf(f.name).trim()))].filter(Boolean);
+  const pick=(re,ban)=>{const c=bases.filter(b=>re.test(b)&&!(ban&&ban.test(b)));c.sort((a,b)=>a.length-b.length);return c[0]||null;};
+  const DIR_BAN=/miss|alt|idle|danc|end|loop|hold|hey|cheer|icon|death|dead/i;
+  if(!anims.idle&&!anims.danceLeft){
+    const dl=pick(/danc/i,/miss|sing|note/i),dL=bases.filter(b=>/danc/i.test(b)&&dirTest('LEFT').test(b)&&!/miss/i.test(b))[0],dR=bases.filter(b=>/danc/i.test(b)&&dirTest('RIGHT').test(b)&&!/miss/i.test(b))[0];
+    if(dL&&dR){add('danceLeft',dL);add('danceRight',dR);}
+    else{const b=pick(/idle|stand/i,/miss|sing|note|hey|alt/i)||dl||pick(/idle|danc|bop/i);if(b)add('idle',b);}
+  }
+  ['LEFT','DOWN','UP','RIGHT'].forEach(d=>{const re=dirTest(d);
+    if(!anims['sing'+d]){const b=pick(re,DIR_BAN);if(b)add('sing'+d,b);}
+    if(!anims['sing'+d+'miss']){const b=pick(new RegExp(re.source+'|'+d,'i'),/^(?!.*miss).*$/i);if(b&&re.test(b))add('sing'+d+'miss',b);}});
+  if(!anims.hey){const b=pick(/hey|cheer|yeah/i,/miss/i);if(b)add('hey',b);}
+  // Fixes chosen in the character creator
+  const map=rec.animMap||{};
+  Object.keys(map).forEach(name=>{const m=map[name]||{};
+    if(m.prefix==='')delete anims[name];
+    else if(m.prefix){const fr=framesFor(all,m.prefix);if(fr.length){const o=anims[name];anims[name]={frames:fr,fps:o?o.fps:24,loop:o?o.loop:false,off:o?o.off.slice():[0,0],prefix:m.prefix};fromFile.delete(name);}}});
   const dance=!!(anims.danceLeft&&anims.danceRight);
-  if(!anims.idle)anims.idle=anims.danceLeft||anims.danceRight||{frames:[all.frames[0]],fps:24,loop:false,off:[0,0]};
+  if(!anims.idle)anims.idle=anims.danceLeft||anims.danceRight||{frames:[all.frames[0]],fps:24,loop:false,off:[0,0],prefix:baseOf(all.frames[0].name)};
   const scale=def.scale,idle=dance?anims.danceLeft:anims.idle,f0=idle.frames[0],ox=f0.fw/2,oy=f0.fh/2;
+  // Line poses up by their feet when no character file gave offsets
+  const autoOn=rec.autoAlign!==false&&!def.list.length;
+  if(autoOn){
+    const at=(a)=>{const f=a.frames[0],ft=feetOf(f);return [ox*(1-scale)+(-f.fx+ft[0])*scale,oy*(1-scale)+(-f.fy+ft[1])*scale];};
+    const [ix,iy]=at(idle),base=[ix-idle.off[0],iy-idle.off[1]];
+    Object.keys(anims).forEach(k=>{const a=anims[k];if(a===idle||fromFile.has(k))return;const [cx,cy]=at(a);a.off=[Math.round(cx-base[0]),Math.round(cy-base[1])];a.auto=true;});
+  }
+  Object.keys(map).forEach(name=>{const m=map[name];if(m&&Array.isArray(m.off)&&anims[name])anims[name].off=[+m.off[0]||0,+m.off[1]||0];});
   const left=-idle.off[0]+ox*(1-scale)-f0.fx*scale,top=-idle.off[1]+oy*(1-scale)-f0.fy*scale;
   const C={id:'x:'+rec.id,rec,name:rec.name||'Custom',short:(rec.name||'Custom').toUpperCase().slice(0,12),col:rec.col||def.col||'#3cee26',jsonCol:def.col,
     atlas:true,anims,scale,flipX:!!def.flipX,userFlip:!!rec.flip,size:+rec.size||1,dance,ox,oy,ax:left+cwOf(f0)*scale/2,ay:top+chOf(f0)*scale,
     fit:360/Math.max(1,chOf(f0)*scale),fmt:def.fmt,sub:def.sub,pixel:!!def.pixel,iconName:def.icon,sheets:sheets.length,imagePath:sheets[0].imagePath,
-    menuScale:0.7,icon:0.5,lead:'square',cut:1800,voice:rec.voice||'',animCfg:rec.animCfg||(rec.animCfg={})};
+    menuScale:0.7,icon:0.5,lead:'square',cut:1800,voice:rec.voice||'',animCfg:rec.animCfg||(rec.animCfg={}),bases,usedFile:def.list.length>0,autoAligned:autoOn};
   let iconImg=null,iconN=1;const ic=files.find(f=>f.kind==='image'&&f.role==='icon');
   if(ic){try{iconImg=await decodeImage(ic.blob);const r=imgW(iconImg)/imgH(iconImg);iconN=r>2.6?3:r>1.6?2:1;}catch(e){iconImg=null;}}
   if(!iconImg){
@@ -3084,9 +3141,9 @@ function renderCmList(){
   if(isNew){const b=document.createElement('button');b.className='btn small cm-item on';const dot=document.createElement('i');dot.style.background='#ffc83d';b.append(dot,document.createTextNode((CM.rec.name||'New character')+' (not saved)'));box.appendChild(b);}
   if(!box.children.length){const p=document.createElement('p');p.className='note';p.textContent='No custom characters yet.';box.appendChild(p);}
 }
-function selectCm(rec){CM.rec=Object.assign({},rec,{files:legacyFiles(rec).slice()});CM.C=CHARS['x:'+rec.id]||null;CM.delArm=0;setPose(CM.A,'idle');fillCmForm();renderCmList();if(!CM.C)rebuildCm();else cmLoadedStatus();}
+function selectCm(rec){CM.rec=Object.assign({},rec,{files:legacyFiles(rec).slice(),animMap:JSON.parse(JSON.stringify(rec.animMap||{}))});CM.cache={};CM.C=CHARS['x:'+rec.id]||null;CM.delArm=0;setPose(CM.A,'idle');fillCmForm();renderCmList();if(!CM.C)rebuildCm();else cmLoadedStatus();}
 function newCm(){
-  CM.rec={id:newId().slice(1),name:'',col:'',flip:false,size:1,files:[]};CM.C=null;CM.delArm=0;fillCmForm();renderCmList();
+  CM.rec={id:newId().slice(1),name:'',col:'',flip:false,size:1,files:[],animMap:{},autoAlign:true};CM.cache={};CM.C=null;CM.delArm=0;fillCmForm();renderCmList();
   setCmStatus('New character. Tap "Add files…" and choose the sprite sheet .png, its .xml, and the character file if you have one.');
   setTimeout(()=>{try{$('#cmName').focus();}catch(e){}},50);
 }
@@ -3118,23 +3175,73 @@ function fillCmForm(){
   const r=CM.rec;
   $('#cmName').value=r.name||'';$('#cmCol').value=r.col||(CM.C&&CM.C.col)||'#3cee26';$('#cmSize').value=r.size||1;$('#cmFlip').checked=!!r.flip;
   $('#cmDel').hidden=!CUSTOM_RECS.some(x=>x.id===r.id);$('#cmDel').textContent='Delete';
-  renderFileList();renderCmAnims();renderFormats();CM.scrub=null;CM.A.force=null;refreshTiming();voiceOptions($('#cmVoice'),true,r.voice||'');
+  renderFileList();renderCmAnims();renderFormats();renderAnimMap();CM.scrub=null;CM.A.force=null;refreshTiming();voiceOptions($('#cmVoice'),true,r.voice||'');
 }
 const FMT_NAME={psych07:'Psych Engine 0.4 to 0.7',psych10:'Psych Engine 1.0',codename:'Codename Engine',vslice:'base game (V-Slice)',leather:'Leather Engine',ga:'Golden Apple style',packer:'Packer .txt',tp:'TexturePacker .json',legacy:'sprite sheet only, animations guessed'};
+const MAP_ROWS=[['idle','Idle'],['danceLeft','Dance left'],['danceRight','Dance right'],['singLEFT','Left'],['singDOWN','Down'],['singUP','Up'],['singRIGHT','Right'],
+  ['singLEFTmiss','Left miss'],['singDOWNmiss','Down miss'],['singUPmiss','Up miss'],['singRIGHTmiss','Right miss'],['hey','Hey']];
+function renderCmWarn(){
+  const w=$('#cmWarn'),C=CM.C;
+  if(!C){w.hidden=true;return;}
+  w.hidden=false;
+  if(C.usedFile){w.className='cm-warn good';w.textContent='Using the character file for the sing names and offsets, together with the names in the .xml and the .png.';}
+  else{w.className='cm-warn bad';w.textContent='If the sprite sheet looks weird, add the character\'s .json too, so it can recognise the sing names. Without it, the names are guessed from the .xml and the .png'+(C.autoAligned?' and the poses are lined up by their feet':'')+'. You can also fix them yourself under "Animation names and offsets".';}
+}
+function renderAnimMap(){
+  renderCmWarn();
+  const box=$('#cmMapRows'),C=CM.C,det=$('#cmMap');
+  det.hidden=!C;if(!C){box.innerHTML='';return;}
+  const r=CM.rec,map=r.animMap||(r.animMap={});
+  $('#cmAuto').checked=r.autoAlign!==false;$('#cmAuto').disabled=C.usedFile;
+  $('#cmAuto').parentElement.title=C.usedFile?'The character file already gives the offsets.':'';
+  box.innerHTML='';
+  ['Animation','Sheet name','X','Y',''].forEach(t=>{const h=document.createElement('span');h.className='h'+(t==='Sheet name'?' sn':'');h.textContent=t;box.appendChild(h);});
+  MAP_ROWS.forEach(([key,label])=>{
+    if(/^dance/.test(key)&&!C.dance&&!(map[key]&&map[key].prefix))return;
+    const a=C.anims[key],m=map[key]||{};
+    const lb=document.createElement('span');lb.textContent=label;
+    if(a&&a.auto&&!m.off){const t=document.createElement('span');t.className='auto';t.textContent=' auto';lb.appendChild(t);}
+    const sel=document.createElement('select');sel.setAttribute('aria-label',label+' sheet name');
+    const opt=(v,t)=>{const o=document.createElement('option');o.value=v;o.textContent=t;sel.appendChild(o);};
+    opt('*',m.prefix===undefined?(a?'Automatic: '+(a.prefix||'from file'):'Automatic: not found'):'Automatic');
+    if(key!=='idle')opt('','Not used');
+    (C.bases||[]).forEach(b=>opt(b,b));
+    sel.value=m.prefix===undefined?'*':m.prefix;if(sel.value!==(m.prefix===undefined?'*':m.prefix))sel.value='*';
+    sel.onchange=()=>{const v=sel.value;if(v==='*')delete map[key];else map[key]={prefix:v};CM.keepPose=true;setPose(CM.A,key==='idle'?'idle':'anim:'+key);CM.A.until=performance.now()+1e9;rebuildCm();};
+    const num=(i)=>{const n=document.createElement('input');n.type='number';n.step='1';n.setAttribute('aria-label',label+(i?' Y':' X')+' offset');n.value=a?String(Math.round(a.off[i])):'0';n.disabled=!a;
+      n.oninput=()=>{const cur=CM.C&&CM.C.anims[key];if(!cur)return;const o=[...cur.off];o[i]=+n.value||0;map[key]=Object.assign(map[key]||{},{off:o});
+        if(key==='idle'||(key==='danceLeft'&&CM.C.dance)){clearTimeout(CM.offT);CM.offT=setTimeout(()=>{CM.keepPose=true;rebuildCm();},200);}else cur.off=o;
+        if(key!=='idle'){setPose(CM.A,'anim:'+key);CM.A.until=performance.now()+1e9;}};return n;};
+    const pl=document.createElement('button');pl.className='btn small';pl.textContent='▶';pl.setAttribute('aria-label','Play '+label);pl.disabled=!a;
+    pl.onclick=()=>{CM.A.force=null;if(CM.scrub)CM.scrub.playing=false;setPose(CM.A,key==='idle'?'idle':'anim:'+key);CM.A.holdUntil=0;CM.A.until=key==='idle'?0:performance.now()+2500;};
+    const an=document.createElement('div');an.className='an';an.append(lb,sel);box.append(an,num(0),num(1),pl);
+  });
+}
+$('#cmAuto').onchange=e=>{CM.rec.autoAlign=e.target.checked;Object.values(CM.rec.animMap||{}).forEach(m=>delete m.off);rebuildCm();};
+$('#cmMapReset').onclick=()=>{CM.rec.animMap={};CM.rec.autoAlign=true;rebuildCm();setCmStatus('Back to automatic. Tap Save character to keep it.');};
+$('#cmTry').onclick=async()=>{
+  await $('#cmSave').onclick();if(!CHARS['x:'+CM.rec.id])return;
+  const id='x:'+CM.rec.id;closeChars();
+  try{tryCharInSong(id);}catch(e){console.warn(e);}
+};
+function tryCharInSong(id){
+  const c=genChart('first-steps',1);c.opp=id;c.id='test:'+id;c.name='Character test';
+  go(()=>startPlay(c,{mode:'editor',banner:'CHARACTER TEST · '+((CHARS[id]&&CHARS[id].name)||'').toUpperCase()}));
+}
 function cmLoadedStatus(){const C=CM.C,names=Object.keys(C.anims).filter(k=>!(C.dance&&k==='idle'&&C.anims.idle===C.anims.danceLeft));
   setCmStatus('Loaded ('+(FMT_NAME[C.fmt]||C.fmt)+(C.sheets>1?', '+C.sheets+' sprite sheets':'')+'): '+names.length+' animations: '+names.join(', ')+'.'+(C.dance?' Dances left and right on the beat.':'')+' Tap Save character to keep it.');renderFormats();}
 async function rebuildCm(){
   const r=CM.rec,my=++CM.busy;
-  if(!r.files.some(f=>f.kind==='image'||/^atlas-/.test(f.kind))){CM.C=null;renderCmAnims();renderFormats();return;}
+  if(!r.files.some(f=>f.kind==='image'||/^atlas-/.test(f.kind))){CM.C=null;renderCmAnims();renderFormats();renderAnimMap();return;}
   setCmStatus('Opening files…');
   try{
-    const C=await buildChar(r);if(my!==CM.busy)return;CM.C=C;
+    const C=await buildChar(r,CM.cache||(CM.cache={}));if(my!==CM.busy)return;CM.C=C;
     if(!r.name){let n=C.iconName||'';n=n||(C.imagePath||((r.files.find(f=>/^atlas-/.test(f.kind))||{}).name)||'Custom').replace(/\.(png|xml|txt|json)$/i,'').replace(/^.*\//,'');
       r.name=(n.charAt(0).toUpperCase()+n.slice(1)).slice(0,24);$('#cmName').value=r.name;}
     C.name=r.name;C.short=r.name.toUpperCase().slice(0,12);
     if(!r.col)$('#cmCol').value=C.col;else C.col=r.col;
-    setPose(CM.A,'idle');renderCmAnims();cmLoadedStatus();renderCmList();CM.scrub=null;CM.A.force=null;refreshTiming();
-  }catch(e){if(my!==CM.busy)return;CM.C=null;renderCmAnims();renderFormats();setCmStatus('Not ready yet: '+(e.message||'something went wrong reading the files.'),true);}
+    if(!CM.keepPose)setPose(CM.A,'idle');CM.keepPose=false;renderCmAnims();cmLoadedStatus();renderCmList();CM.scrub=null;CM.A.force=null;refreshTiming();renderAnimMap();
+  }catch(e){if(my!==CM.busy)return;CM.C=null;renderCmAnims();renderFormats();renderAnimMap();setCmStatus('Not ready yet: '+(e.message||'something went wrong reading the files.'),true);}
 }
 function renderCmAnims(){
   const box=$('#cmAnims');box.innerHTML='';const C=CM.C;if(!C)return;
@@ -3150,7 +3257,9 @@ function drawCmPreview(){
   c.strokeStyle='rgba(255,255,255,.06)';c.lineWidth=2;for(let x=0;x<440;x+=40){c.beginPath();c.moveTo(x,0);c.lineTo(x,440);c.stroke();}
   c.fillStyle='#1d1430';c.fillRect(0,392,440,48);
   if(!CM.C){c.fillStyle='#a99cc9';c.font=FONT_B(24);c.textAlign='center';c.fillText('Preview',220,220);return;}
-  const C=CM.C;atlasDraw(c,C,220,396,0.82,CM.A,C.flipX!==C.userFlip);
+  const C=CM.C;
+  if($('#cmGhost').checked&&!$('#cmMap').hidden&&$('#cmMap').open&&CM.A.pose!=='idle'){const g=CM.ghost||(CM.ghost=mkAnim());g.force={anim:C.dance?'danceLeft':'idle',frame:0};c.save();c.globalAlpha=0.3;atlasDraw(c,C,220,396,0.82,g,C.flipX!==C.userFlip);c.restore();}
+  atlasDraw(c,C,220,396,0.82,CM.A,C.flipX!==C.userFlip);
   C.head(c,52,52,0.36,CM.A);
 }
 async function cmAddFiles(list){
@@ -3189,7 +3298,7 @@ $('#cmSave').onclick=async()=>{
   btn.disabled=true;btn.textContent='Saving…';
   try{
     r.name=($('#cmName').value.trim()||'Custom').slice(0,24);r.col=$('#cmCol').value;r.size=+$('#cmSize').value||1;r.flip=$('#cmFlip').checked;
-    const rec={id:r.id,name:r.name,col:r.col,flip:r.flip,size:r.size,voice:$('#cmVoice').value||'',animCfg:r.animCfg||{},files:r.files.filter(f=>!['unknown','script','animate'].includes(f.kind)).map(f=>({name:f.name,kind:f.kind,role:f.role,blob:f.blob,text:f.text}))};
+    const rec={id:r.id,name:r.name,col:r.col,flip:r.flip,size:r.size,voice:$('#cmVoice').value||'',animCfg:r.animCfg||{},animMap:r.animMap||{},autoAlign:r.autoAlign!==false,files:r.files.filter(f=>!['unknown','script','animate'].includes(f.kind)).map(f=>({name:f.name,kind:f.kind,role:f.role,blob:f.blob,text:f.text}))};
     Object.assign(CM.C,{name:rec.name,short:rec.name.toUpperCase().slice(0,12),col:rec.col,userFlip:rec.flip,size:rec.size,rec,voice:rec.voice,animCfg:rec.animCfg});
     CHARS['x:'+rec.id]=CM.C;
     const i=CUSTOM_RECS.findIndex(x=>x.id===rec.id);if(i>=0)CUSTOM_RECS[i]=rec;else CUSTOM_RECS.push(rec);
@@ -3197,7 +3306,7 @@ $('#cmSave').onclick=async()=>{
     let msg=ok?'Saved "'+rec.name+'". ':'"'+rec.name+'" is ready to use now, but this browser blocked saving, so it will be gone after a reload. ';
     if(CM.assign){chart[CM.assign]='x:'+rec.id;msg+='It is now the '+(CM.assign==='opp'?'opponent':'player')+' in this song.';CM.assign=null;save();}
     else msg+='Pick it from the Opponent or Player list.';
-    CM.rec=Object.assign({},rec,{files:rec.files.slice()});fillCmForm();renderCmList();refreshCharSelects();refreshEd();show(msg,!ok);
+    CM.rec=Object.assign({},rec,{files:rec.files.slice(),animMap:JSON.parse(JSON.stringify(rec.animMap))});fillCmForm();renderCmList();refreshCharSelects();refreshEd();show(msg,!ok);
   }catch(e){show('Saving failed: '+(e.message||'unknown problem'),true);}
   finally{btn.disabled=false;btn.textContent='Save character';}
 };
